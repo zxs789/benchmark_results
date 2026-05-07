@@ -32,17 +32,22 @@ def load_json_records(path: Path) -> Any:
         return records
 
 
-def iter_input_values(data: Any) -> Iterable[str]:
+def normalize_one_line(value: Any) -> str:
+    """Convert a JSON value to one physical line for txt output."""
+    return " ".join(str(value).splitlines()).strip()
+
+
+def iter_input_values(data: Any, keep_newlines: bool = False) -> Iterable[str]:
     """Yield string values for every key named input in nested JSON data."""
     if isinstance(data, dict):
         for key, value in data.items():
             if key == "input":
-                yield str(value)
+                yield str(value) if keep_newlines else normalize_one_line(value)
             else:
-                yield from iter_input_values(value)
+                yield from iter_input_values(value, keep_newlines)
     elif isinstance(data, list):
         for item in data:
-            yield from iter_input_values(item)
+            yield from iter_input_values(item, keep_newlines)
 
 
 def write_inputs(input_values: Iterable[str], output_path: Path, separator: str) -> int:
@@ -59,8 +64,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("txt_file", type=Path, help="Path to the output txt file.")
     parser.add_argument(
         "--separator",
-        default="\n\n",
-        help=r"Text placed between extracted inputs. Default: blank line.",
+        default="\n",
+        help=r"Text placed between extracted inputs. Default: newline.",
+    )
+    parser.add_argument(
+        "--keep-newlines",
+        action="store_true",
+        help="Keep newlines inside each extracted input value.",
     )
     return parser.parse_args()
 
@@ -68,7 +78,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     data = load_json_records(args.json_file)
-    count = write_inputs(iter_input_values(data), args.txt_file, args.separator)
+    count = write_inputs(
+        iter_input_values(data, args.keep_newlines),
+        args.txt_file,
+        args.separator,
+    )
     print(f"Wrote {count} input value(s) to {args.txt_file}")
 
 

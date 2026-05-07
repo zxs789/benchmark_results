@@ -1,88 +1,86 @@
 #!/usr/bin/env python3
-"""Extract all JSON values named "input" and write them to a text file."""
+"""Extract raw JSON string contents for fields named "input" to a text file."""
 
 from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
 
 
-def load_json_records(path: Path) -> Any:
-    """Load a JSON file, falling back to JSON Lines when needed."""
-    text = path.read_text(encoding="utf-8")
+def parse_json_string(source: str, start: int) -> tuple[str, str, int]:
+    """Return the decoded string, raw content, and end offset for a JSON string."""
+    if start >= len(source) or source[start] != '"':
+        raise ValueError(f"Expected JSON string at offset {start}.")
 
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as original_error:
-        records = []
-        for line_number, line in enumerate(text.splitlines(), start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError as line_error:
-                raise ValueError(
-                    f"{path} is neither valid JSON nor JSON Lines. "
-                    f"Failed at line {line_number}: {line_error}"
-                ) from original_error
-        return records
+    index = start + 1
+    while index < len(source):
+        char = source[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == '"':
+            literal = source[start : index + 1]
+            return json.loads(literal), source[start + 1 : index], index + 1
+        index += 1
+
+    raise ValueError(f"Unterminated JSON string at offset {start}.")
 
 
-def normalize_one_line(value: Any) -> str:
-    """Convert a JSON value to one physical line for txt output."""
-    return " ".join(str(value).splitlines()).strip()
+def skip_whitespace(source: str, start: int) -> int:
+    while start < len(source) and source[start].isspace():
+        start += 1
+    return start
 
 
-def iter_input_values(data: Any, keep_newlines: bool = False) -> Iterable[str]:
-    """Yield string values for every key named input in nested JSON data."""
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if key == "input":
-                yield str(value) if keep_newlines else normalize_one_line(value)
-            else:
-                yield from iter_input_values(value, keep_newlines)
-    elif isinstance(data, list):
-        for item in data:
-            yield from iter_input_values(item, keep_newlines)
+def extract_raw_input_values(source: str) -> list[str]:
+    """Extract raw contents inside quotes for every JSON key named input."""
+    values: list[str] = []
+    index = 0
+
+    while index < len(source):
+        if source[index] != '"':
+            index += 1
+            continue
+
+        key, _raw_key, end = parse_json_string(source, index)
+        colon = skip_whitespace(source, end)
+        if colon >= len(source) or source[colon] != ":":
+            index = end
+            continue
+
+        value_start = skip_whitespace(source, colon + 1)
+        if key == "input" and value_start < len(source) and source[value_start] == '"':
+            _value, raw_value, value_end = parse_json_string(source, value_start)
+            values.append(raw_value)
+            index = value_end
+            continue
+
+        index = value_start
+
+    return values
 
 
-def write_inputs(input_values: Iterable[str], output_path: Path, separator: str) -> int:
-    values = list(input_values)
-    output_path.write_text(separator.join(values), encoding="utf-8")
-    return len(values)
+def write_inputs(input_values: list[str], output_path: Path) -> int:
+    output_path.write_text("\n".join(input_values), encoding="utf-8")
+    return len(input_values)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Extract values of all JSON fields named "input" to a txt file.'
+        description=(
+            'Extract raw quoted contents of all JSON fields named "input" to a txt file.'
+        )
     )
     parser.add_argument("json_file", type=Path, help="Path to the source JSON/JSONL file.")
     parser.add_argument("txt_file", type=Path, help="Path to the output txt file.")
-    parser.add_argument(
-        "--separator",
-        default="\n",
-        help=r"Text placed between extracted inputs. Default: newline.",
-    )
-    parser.add_argument(
-        "--keep-newlines",
-        action="store_true",
-        help="Keep newlines inside each extracted input value.",
-    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    data = load_json_records(args.json_file)
-    count = write_inputs(
-        iter_input_values(data, args.keep_newlines),
-        args.txt_file,
-        args.separator,
-    )
+    source = args.json_file.read_text(encoding="utf-8")
+    count = write_inputs(extract_raw_input_values(source), args.txt_file)
     print(f"Wrote {count} input value(s) to {args.txt_file}")
 
 
